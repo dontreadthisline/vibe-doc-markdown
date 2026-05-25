@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 
 class Backend(str, Enum):
+    ADAPTABLE = "adaptable"
     MARKITDOWN = "markitdown"
     PANDOC = "pandoc"
     PDFPLUMBER = "pdfplumber"

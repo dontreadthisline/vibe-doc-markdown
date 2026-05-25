@@ -74,7 +74,7 @@ os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7890"
 ```python
 def convert_document(
     input: ConvertInput,
-    backend: Backend = Backend.MARKITDOWN,
+    backend: Backend = Backend.ADAPTABLE,
 ) -> ConvertResult:
     """将文档转换为 Markdown 格式。"""
 ```
@@ -85,6 +85,7 @@ def convert_document(
 
 ```python
 class Backend(str, Enum):
+    ADAPTABLE = "adaptable"    # 自动选择最佳后端（默认）
     MARKITDOWN = "markitdown"  # 通用文档转换，速度快
     PANDOC = "pandoc"          # 通用文档转换，不支持 PDF 解析
     PDFPLUMBER = "pdfplumber"  # PDF 专用，轻量级
@@ -129,18 +130,20 @@ class ConvertResult:
 
 ## 使用示例
 
-### 基础用法
+### 基础用法（推荐）
 
 ```python
-from vibe_doc_markdown import convert_document, Backend, ConvertInput
+from vibe_doc_markdown import convert_document, ConvertInput
 
-# 从本地文件转换
+# 从本地文件转换，自动选择最佳后端
+# PDF -> docling, DOCX -> markitdown
 input_obj = ConvertInput.from_path("/path/to/document.pdf")
-result = convert_document(input_obj, Backend.MARKITDOWN)
+result = convert_document(input_obj)
 print(result.markdown)
+print(f"Used backend: {result.backend.value}")
 ```
 
-### 选择不同后端
+### 手动指定后端
 
 ```python
 from vibe_doc_markdown import convert_document, Backend, ConvertInput
@@ -156,8 +159,8 @@ result = convert_document(input_obj, Backend.DOCLING)
 # 使用 marker（深度学习，需下载大型模型）
 result = convert_document(input_obj, Backend.MARKER)
 
-# 默认使用 markitdown
-result = convert_document(input_obj)  # 等同于 Backend.MARKITDOWN
+# 默认使用 adaptable（自动选择最佳后端）
+result = convert_document(input_obj)  # 等同于 Backend.ADAPTABLE
 ```
 
 ### 从 URL 转换
@@ -189,7 +192,7 @@ print(result.markdown)
 from vibe_doc_markdown.backends import BACKENDS
 
 print("Available backends:", list(BACKENDS.keys()))
-# 输出: ['docling', 'markitdown', 'pandoc', 'pdfplumber', 'marker']
+# 输出: ['adaptable', 'docling', 'markitdown', 'pandoc', 'pdfplumber', 'marker']
 ```
 
 ### 批量转换示例
@@ -222,11 +225,20 @@ convert_directory(
 
 | 后端 | 适用场景 | 优点 | 缺点 |
 |------|----------|------|------|
-| markitdown | 通用文档 | 速度快、无额外依赖 | PDF 效果一般 |
+| **adaptable** | **通用（推荐）** | **自动选择最佳后端** | - |
+| markitdown | DOCX/DOC | 速度快、无额外依赖 | PDF 效果一般 |
 | pdfplumber | 简单 PDF | 轻量、快速 | 复杂排版支持差 |
 | docling | 高质量 PDF | 格式保留好 | 需下载模型 (~500MB) |
 | marker | 复杂 PDF | 深度学习、效果最佳 | 模型大 (~2GB)、速度慢 |
 | pandoc | 非 PDF 文档 | 格式支持广 | 不支持 PDF 解析 |
+
+### Adaptable 后端自动选择规则
+
+| 文件类型 | 自动选择的后端 |
+|----------|----------------|
+| `.pdf` | docling |
+| `.docx` | markitdown |
+| `.doc` | markitdown |
 
 ## 异常处理
 

@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
   "docling>=2.95.0",
   "marker-pdf>=1.8",
-  "markitdown>=0.1.5",
+  "markitdown[docx]>=0.1.5",
   "pdfplumber>=0.11.9",
   "pypandoc-binary>=1.17",
 ]

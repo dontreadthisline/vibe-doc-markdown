@@ -1,3 +1,4 @@
+from .adaptable import AdaptableBackend
 from .base import AbstractBackend
 from .docling import DoclingBackend
 from .markitdown import MarkItDownBackend
@@ -5,6 +6,7 @@ from .pandoc import PandocBackend
 from .pdfplumber import PdfplumberBackend
 
 BACKENDS = {
+    "adaptable": AdaptableBackend,
     "docling": DoclingBackend,
     "markitdown": MarkItDownBackend,
     "pandoc": PandocBackend,

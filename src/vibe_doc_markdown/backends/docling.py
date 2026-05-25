@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ..types import Backend, ConvertInput, ConvertResult
 from .base import AbstractBackend
 
 _RAPIDOCR_MODEL_DIR = Path.home() / ".cache" / "rapidocr" / "models"
+_HF_CACHE_DIR = Path.home() / ".cache" / "huggingface"
+
+
+def _setup_offline_mode() -> None:
+    """Enable HuggingFace offline mode if local cache exists."""
+    if _HF_CACHE_DIR.exists():
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
 class DoclingBackend(AbstractBackend):
@@ -14,6 +23,8 @@ class DoclingBackend(AbstractBackend):
         return Backend.DOCLING
 
     def convert(self, input: ConvertInput) -> ConvertResult:
+        _setup_offline_mode()
+
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import (
             PdfPipelineOptions,

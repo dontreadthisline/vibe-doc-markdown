@@ -6,7 +6,7 @@ from .types import Backend, ConvertInput, ConvertResult
 
 def convert_document(
     input: ConvertInput,
-    backend: Backend = Backend.MARKITDOWN,
+    backend: Backend = Backend.ADAPTABLE,
 ) -> ConvertResult:
     backend_cls = BACKENDS.get(backend.value)
     if backend_cls is None:
