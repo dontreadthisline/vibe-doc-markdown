@@ -1,835 +1,476 @@
-https://hjfy.top/arxiv/2603.25551
-Voxtral 语音合成
+端到端重分割的重叠感知说话人分割
+1 2
+Hervé Bredin & Antoine Laurent
+1
+IRIT, Université de Toulouse, CNRS, Toulouse, France
+2
+LIUM , Université du Mans, France
+herve.bredin@irit.fr, antoine.laurent@univ-lemans.fr
 Abstract
-我们介绍 VoxtralTTS，这是一种富有表现力的多语言文本到语音模型，仅
-需 3 秒的参考音频即可生成自然语音。Voxtral TTS 采用混合架构，结合
-了语义语音 token 的自回归生成与声学 token 的流匹配。这些 token 使
-用 Voxtral Codec 进行编码和解码，该语音分词器从零开始训练，采用混
-合 VQ-FSQ 量化方案。在由母语者进行的人类评估中，由于其自然性和表
-现力，Voxtral TTS 在多语言语音克隆方面更受青睐，相较于 ElevenLabs
-Flashv2.5的胜率高达68.4%。我们以CCBY-NC许可证发布该模型权重。
-Webpage: https://mistral.ai/news/voxtral-tts
-Model weights: https://huggingface.co/mistralai/Voxtral-4B-TTS-2603
-Win Rate
-Flagship voices 58.3% 41.7%
-Voice cloning 68.4% 31.6%
-0 20 40 60 80 100
-Average Listener Preference (%)
-Voxtral TTS ElevenLabs Flash v2.5
-图 1: Voxtral TTS 在人工评估中优于 ElevenLabs Flash v2.5。我们绘制了 Voxtral TTS 与
-ElevenLabsFlashv2.5在两类人工评估中的胜率。对于旗舰音色，我们使用各模型的默认音色以及77
-个不同的文本示例。在音色克隆设置中，我们提供一段简短的音频参考片段和60个文本提示。在两类
-评估中，人工标注者会盲评两个模型之间的音频哪个更优。Voxtral TTS 在 58.3% 和 68.4% 的实例
-中更受青睐。
-
-|  | 58.3% |  |  | 41.7 |  | % |
-|---|---|---|---|---|---|---|
-|  |  |  |  |  |  |  |
-|  | 68.4% |  |  |  |  | 31.6% |
-|  |  |  |  |  |  |  |
-
-1 引言
-自然且富有表现力的文本转语音（TTS）仍是灵活人机交互的核心，其应用涵盖虚拟助手、
-有声读物和无障碍工具。尽管近期的神经网络 TTS 模型在语音可懂性方面表现优异，但在
-zero-shot 语音情景下捕捉人类语音的细微差别与表现力仍是一个未解决的挑战。
-最近的 zero-shot TTS 系统通常以从短语音提示中提取的离散语音 token 作为生成条件，从
-而实现对未见说话人的泛化以及在长序列上的自然合成 [Borsos et al., 2023, Wang et al.,
-2023]。与此同时，扩散模型和基于流的模型在建模语音生成中的丰富声学变化方面表现出
-色 [Popov et al., 2021, Le et al., 2023]。最近的语音编解码器表明，语音可以分解为低速率
-语义流和更高速率的声学流 [Défossez et al., 2024]。层次化生成器如 Moshi 已经利用这种结
-构，采用时间 Transformer 对时间步进行建模，并使用深度 Transformer 对编解码器层级进
-行建模。然而，这些系统中的声学生成仍保持深度方向的自回归特性。对于 TTS 来说，这
-就引出了一个问题：稠密的声学组件是否必须始终以自回归方式建模，或者是否可以通过一
-种条件连续模型更有效地生成？
-在本工作中，我们提出了VoxtralTTS，这是一种基于表示感知混合架构的多语言zero-shot
-文本到语音系统。通过 Voxtral 编码器对语音提示进行分词，该编码器是一种低比特率语音
-分词器，包含经语音识别（ASR）蒸馏得到的语义 token 以及有限标量量化（FSQ）的声学
-token [Mentzer et al., 2023]。基于这种分解表示，仅解码器的 Transformer 模型自回归地预
-测语义 token 序列，而一个轻量级的流匹配模型则根据解码器状态预测声学 token。该设计
-结合了自回归建模在长程一致性方面的优势与连续流匹配在丰富声学细节方面的优势。我们
-通过将标准语义token生成偏好目标与基于流的声学预测偏好目标相结合，将直接偏好优化
-（DPO） [Rafailov et al., 2023] 适配到这种离散-连续混合设置中 [Ziv et al., 2025]。
-Voxtral TTS 支持 9 种语言，支持最短 3 秒的语音提示，并专为低延迟流式推理设计。在
-SEED-TTS [Anastassiou et al., 2024] 和 MiniMax-TTS [Zhang et al., 2025] 的自动评估
-中，其表现出优异的可懂性和自然度，在说话人相似度得分上超越 ElevenLabs v3。在多语
-言 zero-shot 语音克隆的人类评估中，其胜率高达 68.4%，优于 ElevenLabs Flash v2.5，同
-时在富有表现力的旗舰语音评估中与强大的专有系统保持竞争力。
-2 建模
-图 2 展示了 Voxtral TTS 的架构。该架构包含一种新型音频编解码器——Voxtral 编解码
-器——可将参考语音样本编码为由语义 token 和声学 token 组成的音频 token。这些音频
-token 与文本 token 结合，构成语言模型解码器主干的输入。为了生成语音，解码器主干逐
-个自回归地生成语义 token 输出。一个流匹配 Transformer 用于生成声学 token。编解码器
-解码器将输出 token 映射为对应的音频波形。
-2.1 Voxtral 编解码器
-Voxtral 编解码器是一种卷积-Transformer 自编码器 [Défossez et al., 2022]，可将原始的
-24 kHz 单声道波形压缩为每秒 12.5 Hz 的 37 个离散 token（1 个语义 + 36 个声学），总比
-特率为 2.14 kbps。这些 token 作为 Voxtral TTS 的输入音频表示。通过一种新颖的架构与
-训练目标改进组合，Voxtral 编解码器优于现有的基准模型如 Mimi [Défossez et al., 2024]，
-结果见第 4.1 节。
-波形自编码器 受基于 Transformer 的音频编码器先前工作 [Parker et al., 2024, Wu et al.,
-2024] 的启发，我们的音频分词器作用于“分块化”的波形。24kHz 的单声道输入波形被分
-2
-
-80ms audio
-A
-Acoustic Semantic
-Flow-Matching Linear
-Transformer Head
-A A <EOA>
-Autoregressive Decoder Backbone
-A A A A A T T T T A A A
-voice reference
-图 2: Voxtral TTS 架构概览。一段长度为 3 秒至 30 秒的语音参考输入到 Voxtral Codec 编码器
-中，以获得帧率为12.5Hz的音频token。每个音频帧（标注为 A）包含一个语义token和声学token。
-语音参考的音频 token 与文本提示 token（标注为 T）一同输入到解码器主干网络中。解码器自回归
-地生成一串语义token，直到遇到特殊的音频结束token（<EOA>）。在每个时间步，解码器主干网
-络输出的语义 token 被送入一个流匹配 Transformer，该模块多次运行以预测声学 token。最终，语
-义 token 和声学 token 被输入到 Voxtral Codec 解码器中，生成目标波形。
-割为不重叠的 240 样本块，从而得到编码器的 100 Hz 输入。这些 100 Hz 的输入帧首先通
-过核大小为 7 的因果卷积投影到 1024 维嵌入，然后经过 4 个编码器块，每个块包含：
-• 一个 2 层的因果自注意力 Transformer，采用滑动窗口注意力（窗口大小为 16 →
-8→4→2 ，在每个下采样阶段减半），ALiBi 位置偏置 [Press et al., 2021]，QK 范
-数，以及初始值为 0.01 的 LayerScale [Touvron et al., 2021]。
-• 一个因果卷积神经网络层。在前三个块中，卷积神经网络通过 2× 下采样（步幅为
-2），从 100 Hz 到 12.5 Hz 累计减少了 8× 。在第四个块中，卷积神经网络的步幅为
-1，并将 1024 维的表示投影到 292 维的潜在空间。
-292维的潜在表示随后被量化为音频token（详情见下文）。解码器以相反顺序模仿编码器：首
-先通过一个因果卷积神经网络将 292 维的潜在表示映射回 1024 维，接着经过 4 个块，每个
-块包含一个转置卷积神经网络（用于 2× 上采样）和一个两层的因果自注意力 Transformer，
-逐步将 12.5 Hz 的潜在表示恢复至 100 Hz。最后，一个核大小为 7 的因果卷积将 1024 维映
-射回 240 样本的块大小，以重建波形。
-表示量化。 292 维的潜在变量被拆分为一个 256 维的语义分量和一个 36 维的声学分量，
-这两个分量分别独立进行量化：
-3
-
-24 kHz
-hctaP
-vnoC
-lasuaC
-kcolB
-remrofsnarT
-kcolB
-remrofsnarT
-vnoC
-lasuaC
-dedirtS
-raeniL
-raeniL
-)652=d(
-1q
-)63=d(
-2q
-QV
-QSF
-(21 levels) x36
-kcolB
-remrofsnarT
-kcolB
-remrofsnarT
-vnoC
-lasuaC
-dedirtS
-vnoC
-lasuaC
-desopsnarT
-kcolB
-remrofsnarT
-kcolB
-remrofsnarT
-vnoC
-lasuaC
-Adversarial + Reconstruction Losses
-Soft-Aligned
-ASR Model
-ASR Distillation Loss
-hctapnU
-Encoder Quantization Decoder
-Repeat 4x Repeat 4x
-图 3: Voxtral Codec 的架构概览与训练。它包含一个分离的语义 VQ 编码字典和声学 FSQ 编码
-字典。语义 token 和声学 token 一同用于重构。语义 token 还从监督的 ASR 模型中获得额外的蒸馏
-损失。
-• 语义组件通过一个学成的向量量化器（VQ； [Van Den Oord et al., 2017]）进行量
-化，码本大小为 8192。在训练过程中，以 50% 的概率应用 VQ；其余样本则未经量
-化直接通过。
-• 每个 36 个声学维度的信号都经过一个 tanh 激活，并通过有限标量量化（FSQ；
-[Mentzer et al., 2023]）独立地量化为 21 个均匀等级。在训练过程中，我们采用
-类似抖动的 FSQ [Parker et al., 2024]：50% 的样本使用 FSQ 进行量化，25% 的样
-本添加幅度为 1/L 的均匀噪声（其中 L=21 为等级数），另有 25% 的样本不经过量
-化直接通过。
-总比特率为 12.5×(log 8192+36×log 21)≈2.14 kbps。
-2 2
-语义token学习 为了更好地将语音的语义内容融入语义token中，我们采用了一种辅助的
-ASR 蒸馏损失。与之前通过蒸馏自监督语音表示来学习“语义”token 的方法不同 [Zhang
-et al., 2023, Défossez et al., 2024]，这些表示更偏向于 语音而非语义 [Liu et al., 2024]，
-我们从一个监督式 ASR 模型中进行蒸馏。研究表明，这种方法能够生成更有效的语义表
-示 [Vashishth et al., 2024]。
-一个冻结的 Whisper [Radford et al., 2023] 模型在输入音频上以自回归方式运行，生成解码
-器隐状态和交叉注意力权重。后置 VQ 的语义嵌入被线性投影以匹配 Whisper 的隐状态维
-度，然后使用余弦距离损失与最后一层解码器的隐状态对齐：
-1 L z˜ ·h F
-L ASR =1− L ∑ ∥z˜ l ∥∥h l ∥ , z˜ l =∑A l,f z f (1)
-l l
-l=1 f=1
-其中，z 是在编码器帧f 处经过投影的后VQ语义嵌入，h 是Whisper在token位置l 处
-f l
-的最末层解码器隐状态，而
-A∈RL×F
-是通过动态时间规整（DTW）[Berndt and Cli(cid:122)ord,
-1994] 识别出与词级时间戳相关性最强的一组 Whisper 交叉注意力头所导出的软对齐矩阵。
-为了计算A，这些头的交叉注意力权重在解码器token维度上进行规范化，经中值滤波后在
-4
-
-|  |
-|---|
-|  |
-
-头之间取平均。得到的矩阵沿编码器帧轴进行线性插值，以匹配编码器帧率（12.5 Hz），因
-此 z˜ 是与第 l 个解码器 token 对齐的编码器嵌入的注意力加权和。
-l
-该设计使分词器能够在无需外部强制对齐工具或配对转录文本的情况下，学习与文本对齐的
-语义 token，因为对齐信息是通过 Whisper 的交叉注意力权重隐式推导得出的。从连续隐状
-态中提炼信息，而非依赖硬性转录标签，能够提供更丰富的监督信号，包括模型置信度和语
-音相似性。
-对抗训练 一个具有 8 个 STFT 大小（2296, 1418, 876, 542, 334, 206, 126, 76）的多分辨率
-判别器与编码器一同训练。每个判别器作为二分类器，使用铰链损失在真实音频 x 和重建
-音频 xˆ 之间进行训练。在每个判别器的每一层活性值上计算基于 L 的特征匹配损失：
-1
-M N
-1
-L feature (x,xˆ)= MN ∑ ∑∥D n m(x)−D n m(xˆ)∥ 1 (2)
-m=1n=1
-此处，Dm 表示第n个判别器的第m层，其中每个N 个判别器均具有M 层。根据Défossez
-n
-etal. [2024],Parkeretal.[2024]，我们使用该特征匹配损失替代标准GAN生成器损失，因
-为不断演化的判别器特征在整个训练过程中提供了越来越具有区分性的重构信号。
-训练目标。 Voxtral 编码器以端到端方式训练，使用以下损失函数：
-αL +βL +γL +γL +δL (3)
-feature ASR L1 STFT commit
-其中 α=1.0 ，β=1.0 ，γ=0.9999t （t 为当前训练步骤），以及 δ=0.1 。L 是原始波形与
-L1
-重构波形之间的 L 距离，L 是其短时傅里叶变换（STFT）幅度上的 L 损失。两种
-1 STFT 1
-重构损失共享相同的指数衰减调度 γ ，该调度在训练初期促进学习，并随着对抗信号的增
-强而逐渐减弱其影响 [Parker et al., 2024]。L =∥z −sg(z )∥2 是向量量化（VQ）承
-commit e q 2
-诺损失 [Van Den Oord et al., 2017]，其中 sg 表示停止梯度操作符。
-表 1 给出了 Voxtral Codec 配置的概要。该完整模型大约有 300M 个参数。所有决策均经过
-消融实验，最终配置在最优化方面表现稳定，并达到了最佳音质。
-2.2 解码器骨干网络
-Voxtral TTS 的解码器主干遵循 Ministral 3B [Liu et al., 2026] 的架构，一个自回归的仅解
-码器 Transformer。输入序列由语音参考音频 token 和文本 token 组成，输出音频 token 由
-此自回归生成。每个音频帧由 37 个离散 token 表示（1 个语义，36 个声学）。每个码本都有
-其独立的嵌入查找表（语义码本为 8192 项，每个声学码本为 21 项），这些查找表的嵌入值
-相加后生成每个音频帧的单一嵌入。
-解码器主干生成一系列隐状态。线性头部将每个隐状态 h 投影到语义码本词表（8192 个条
-目加上一个特殊的音频结束 (<EOA>) token）的 Logit 值上，使用标准交叉熵损失进行训
-练。为了预测声学token，h被输入到一个流匹配Transformer中，其描述见第2.3节。流匹
-配 Transformer 的浮点输出在进入下一步自回归处理前被离散化，以保持完全离散的 token
-接口。
-2.3 流匹配 Transformer
-为了预测声学 token，流匹配（FM）Transformer 在解码器主干中每个生成步骤的隐状态 h
-上独立运行。我们将在连续空间中建模声学 token 以利用 FM 的平滑速度场，并仅在输出
-时进行离散化，以与自回归主干的离散 token 词表对接。
-5
-
-表 1: Voxtral 编解码器的关键超参数。
-Parameter Value
-Input / Preprocessing
-Sampling rate 24000
-Patch size 240
-AutoEncoder
-Encoder patch projection kernel size 7
-Encoder patch projection dimension 1024
-Encoder transformer layers1 2→2→2→2
-Encoder sliding window size 16→8→4→2
-Encoder conv kernels 4→4→4→3
-Encoder conv strides 2→2→2→1
-(Decoder (cid:126)ips all → to ← and uses transposed convolutions)
-Discrete bottleneck
-Semantic VQ2 codebook size 8192
-Acoustic FSQ3codebook count×size 36×21
-Discriminator
-FFT sizes 2296, 1418, 876, 542, 334, 206, 126, 76
-Channels 256
-1
-Fortrainingstability,weuseLayerScalewithinitialscaleof0.01andQKnormalizationwith
-ϵ=10−6.
-2
-Duringtraining,VQisappliedwith50%probability.
-3 Duringtraining: 50%quantizedwithFSQ,25%dithered(uniformnoiseofmagnitude1/L),
-25%unquantized.
-FM Transformer 由一个双向的三层 Transformer 组成，其宽度与解码器主干网络相同。它
-建模了将高斯噪声 (x ) 传输到声学嵌入 (x ) 的速度场，该过程通过一系列函数评估步骤
-0 1
-0≤t≤1 完成。它接收以下输入：h ，当前的函数评估步骤 t （编码为正弦嵌入），以及当
-前的声学嵌入 x ∈R36 。我们为每个输入 h 、t 和 x 使用独立的投影层，因为它们的活性
-t t
-值尺度不同。我们还对使用 DiT 风格的自适应 LayerNorm (AdaLN) 层进行条件控制进行
-了消融实验 [Peebles and Xie, 2023]，但发现我们的方法更优。
-训练期间，对于“无条件”建模，隐状态有 10% 的概率被丢弃。在推理阶段，我们使用欧拉
-方法对速度向量场v 进行积分，共进行8次函数求值（NFEs），并采用无分类器引导（CFG）
+说话人分割旨在将一个或多个说话人之间的对话划分为各
+个说话人的发言段。通常被视作三个子任务（语音活动检
+测、说话人切换检测和重叠语音检测）的后期组合，我们
+提出直接训练一个端到端的分割模型来完成该任务。受原
+始端到端神经说话人分离方法（EEND）的启发，该任务
+被建模为一种多标签分类问题，并采用排列不变训练。主
+要区别在于，我们的模型在短音频片段（5秒）上运行，但
+具有更高的时间分辨率（每 16 毫秒）。在多个说话人分离
+数据集上的实验表明，我们的模型在语音活动检测和重叠
+语音检测方面均取得了显著成功。所提出的模型还可作为
+后处理步骤，用于检测并正确分配重叠语音区域。与最佳
+考虑的基准（VBx）相比，相对说话人分离错误率改进在
+AMI 数据集上达到 17%，在 DIHARD 3 数据集上达到
+13%，在 VoxConverse 数据集上也达到 13%。
+关键词：说话人辨识，说话人分割，语音活动检测，重叠
+语音检测，重新分割。
+1. 引言
+语音处理领域依赖术语 分割来描述多种任务：从将
+音频信号分类为三类 {语音, 音乐, 其他}，到检测呼吸单
+元、定位词边界，甚至将语音区域划分为语音单元。在这
+一从粗到细的时间尺度上，说话人分割介于 {语音, 非语
+音} 分类与呼吸单元检测之间。其核心在于将语音区域划
+分为更小的片段，每个片段仅包含单一说话人的语音。过
+去，该问题被视作多个子任务的组合：首先，语音活动检
+测（VAD）剔除所有不包含语音的区域；随后，说话人切
+换检测（SCD）通过寻找说话人发生变化的时间点，将剩
+余的语音区域划分为不同的说话人发言段 [1]。从表面看，
+这种说话人分割的定义似乎清晰且无歧义。然而，深入观
+察真实场景中的自发对话时，会发现诸多复杂现象——重
+叠语音、打断以及回应性话语是最显著的几种。因此，研
+究人员也开始关注重叠语音检测（OSD）任务 [2, 3, 4]。
+端到端说话人分割。与将语音活动检测、说话人切换检
+测和重叠语音检测作为三个独立任务处理不同，我们的
+首个贡献是训练一个独特的端到端说话人分割模型，其
+输出涵盖了上述子任务。该模型直接受近期端到端说话
+人聚类进展的启发，特别是由日立 [5, 6, 7] 开发的不断
+发展的端到端神经聚类（EEND）方法族。所提出的分
+割模型优于（或至少不逊于）若干语音活动检测基准，
+并在所有三个考虑的数据集上建立了重叠语音检测的
+新状态：AMI Mix-Headset [8]、DIHARD 3 [9, 10] 和
+VoxConverse [11]。我们未进行说话人切换检测实验。
+重叠感知的重新分割。我们的第二个贡献涉及将检测到
+的重叠语音区域分配给正确说话人的难题。尽管过去已
+ThisworkwasgrantedaccesstotheHPCresourcesofIDRIS
+under the allocation AD011012177 made by GENCI, and was
+partly funded by the French National Research Agency (ANR)
+through the PLUMCOT (ANR-16-CE92-0025) and the GEM
+(ANR-19-CE38-0012)projects.
+ecnerefer
+tupni
+tuptuo
+https://hjfy.top/arxiv/2104.04045
+图 1: 我们模型在来自同一对话中两个 5 秒片段
+上的实际输出（数据源：DIHARD3 数据集中的文件
+DH_EVAL_0035.(cid:126)ac）。上行为参考标注。中行为模型摄入的
+音频片段。下行为模型返回的原始说话人活性值。得益于
+排列不变训练，注意左侧蓝色说话人对应橙色活性值，右
+侧则对应绿色活性值。
+有少数尝试 [4, 12]，但该问题仍然非常困难，至今尚
+未有简单的启发式基准能够被超越 [13]。我们通过大
+量实验表明，当我们的分割模型转化为重叠感知的重
+新分割模块时，其性能始终优于该启发式基准——在
+结合VBx方法时，在AMI数据集上达到了新的状态水平。
+可复现性研究。最后但同样重要的是，我们的最终贡献在于
+分享预训练模型，并将其集成到pyannote开源库中，以实
+现可复现性目的：huggingface.co/pyannote/segmentation. 所
+提出方法（VAD、OSD和重分割）的预期输出也可在此地
+址以RTTM 格式获取，以便于未来比较。
+2. 端到端说话人分割
+与原始的EEND方法[5]类似，该任务被建模为一个
+使用排列不变训练的多标签分类问题。如图 1 所示，主要
+区别在于我们的模型处理的是短音频片段（5秒），但具有
+更高的时间分辨率（约每 16ms 一次）。处理短音频片段
+也意味着说话人数量比原始 EEND 方法（处理完整对话）
+要少且变化更小——这使得问题更容易解决。例如，我们
+发现训练集中的每段可能的5秒片段（稍后在第3节中定
+义）中，超过 99% 含有少于 K =4 个说话人。
+max
+2.1. 置换不变训练
+给定一个音频片段 X，其参考分割可以编码为一系列
+K -维度的二值帧 y = {y ,...,y }，其中当说话人 k
+max 1 T
+在帧 t 活动时 y
 t
-[Ho and Salimans, 2022]。具体而言，v 和 x 的形式为：
-t t
-v =αv (x ,t,h)+(1−α)v (x ,t,∅) (4)
-t θ t θ t
-x t−∆t =x t −v t ·∆t (5)
-，其中 h 为解码器主干网络的隐状态，∅ 为无条件情况，即我们传递一个与 h 形状相同的零
-向量。v (x ,t,h) 为在时间步 t 时预测的速度场，样本 x 以及条件输入 h。我们根据第 5.2
-θ t t
-节中的分析设定 ∆t=1/8 和 α=1.2。
-注意，在我们的架构中，CFG 在 FM Transformer 的每一帧上独立应用。因此，它仅需额
-外进行一次 FM Transformer 的前向传播，相比在解码器主干中应用 CFG 要显著便宜。由
-FM Transformer 预测的浮点值通过量化至 21 个 FSQ 级别转换为离散整数值。这些离散化
-的 token 将作为输入提供给下一解码步骤中的解码器主干。
-6
+∈ {0,1}K max 且 yt k = 1，否则 yt k = 0。
+我们可以任意按首次活动时间顺序对说话人进行排序，但
+对 K 个维度的任何排列都是参考分割的有效表示。因
+max
+此，对于此类多标签分类问题通常使用的二值交叉熵损失
+函数 L 必须转换为一种排列不变的损失函数 L，通过 BCE
 
-由于解码器主干网络的输入是经过嵌入查找的离散 token，我们还考虑了受 MaskGIT
-[Chang et al., 2022] 和 Depth Transformer [Défossez et al., 2024] 启发的替代架构。这两
-种方法表现尚可，但在人类评估中仍不如 FM，尤其是在表现力方面。此外，MaskGIT 需
-要对全部 36 个声学码本位置和条件 token 进行注意力计算，导致每帧的序列长度为 38，而
-FMTransformer仅需3个（h,t,x ）。类似地，DepthTransformer需要36步自回归解码，
-t
-而FM仅需8次非自回归求解步骤（NFE）。因此，FM在质量、计算量和延迟方面均更优。
-3 训练
-3.1 预训练
-我们使用经过 Voxtral Mini Transcribe [Liu et al., 2025] 伪标记的配对音频和转录文本对来
-训练模型。每个训练样本由一个元组 (A ,T ,A ) 组成，其中 A 为语音参考，T 为 A 的
-1 2 2 1 2 2
-转录文本，这是我们生成的目标。与 Voxtral 类似，我们在 A 与 T 之间插入一个 <next>
-1 2
-特殊 token，在 T 与 A 之间插入一个 <repeat> 特殊 token。我们确保 A 与 A 来自同
-2 2 1 2
-一说话人且为单说话人片段，但不一定在时间上相邻。A 与 A 的最大时长为 180 秒，且
-1 2
-我们确保 A 至少为 1 秒长。由于自然对话中人类语音持续时间具有长尾分布特性，我们
-1
-发现模型在 3 至 25 秒之间的语音提示（A ）上表现最佳。
-1
-损失仅在 A 的 token 上计算。我们使用由两部分组成的损失函数来优化模型，其中包括在
-2
-语义 token L 上的交叉熵损失以及在声学 token 上的 (cid:126)ow-matching 损失 L 。
-semantic acoustic
-我们采用如下的简单条件 (cid:126)ow-matching 目标：
-L acoustic =E t∼U[0,1],x0∼D,x1∼N(0,1) ∥v θ (x t ,t)−u t (x t |x 1 ,x 0 )∥2 2 (6)
-u (x |x ,x )=x −x (7)
-t t 1 0 1 0
-其中 u 为目标条件速度，v 为 FM Transformer 预测的速度，x 从正态分布中采样得到，
-t θ 1
-x 为数据分布 D。我们使用 Ministral 3B 初始化解码器主干网络。新引入的模块，如 FM
-0
-Transformer、音频代码本嵌入查找表和输出投影层，均进行随机初始化。在训练过程中，
-我们冻结解码器主干中的文本嵌入层，以提高对 Voxtral Mini Transcribe 转录中低频出现
-的文本 token 的鲁棒性。为避免对静音部分过拟合，我们还对语音活动检测（VAD）模型
-判定无语音的帧采用较低的损失权重，并将极长静音段的损失权重设为 0。此外，我们还对
-转录文本进行简单的基于大语言模型的重写，以增强对规范化的与非规范化的文本（例如
-“5 - 4”与“(cid:125)ve minus four”）的鲁棒性。
-3.2 直接偏好最优化
-我们使用直接偏好优化（DPO）[Rafailov et al., 2023] 对模型进行后训练，重点关注提升词
-错误率（WER）和说话人相似度。对于语义码本，我们采用标准的 DPO 目标。鉴于声学码
-本是通过流匹配预测的，我们将目标函数从 Ziv et al. [2025] 进行调整：
-L(θ)=−E t∼U(0,1),xw,xllogσ ( −β ( ∆ θ (xw,xl,t)−∆ θ
-ref
-(xw,xl,t) )) , (8)
-其中
-∆ (xw,xl,t)=∥v (xw,t)−u (xw|xw)∥2−∥v (xl,t)−u (xl|xl)∥2. (9)
-θ θ t t t 2 θ t t t 2
-7
+𝜃on
+𝜃off
+(cid:2)on (cid:2)off
+图 2: 为了获得最终的二值分割结果，说话人活性值经过
+后处理：首先使用θ /θ 滞回阈值法，然后填充短于δ
+on o(cid:122) o(cid:122)
+的间隙（右图中浅绿色区域），最后移除短于δ 的活性区
+on
+域（在这些示例中未发生）。
+在 y 所有 K 个维度上的所有可能排列 perm(y) 上运
+max
+行实现：
+L(y,^y)= min L (perm(y),^y) (1)
+BCE
+perm(y)
+with ^y = f(X) where f 是我们的分割模型，其架构将在
+本文后续部分描述。在实际应用中，为提高效率，我们首
+先计算所有 y 和^y 维度成对之间的 K ×K 二元交
+max max
+叉熵损失，并依赖匈牙利算法找到使总体二元交叉熵损失
+最小化的排列。
+2.2. 实时数据增强
+训练时，从训练集中随机裁剪出5秒的音频片段（及其
+对应的参考分割）。为了进一步增加多样性，我们采用实时
+随机数据增强。第一种增强方式是添加具有随机信噪比的
+背景噪声。受我们之前关于重叠语音检测工作的启发 [4]，
+第二种增强方式是人为增加重叠语音的数量。具体做法是
+将两个随机的 5 秒音频片段以随机信噪比相加（并相应合
+并其参考分割）。若生成的片段中说话人数量超过 K ，
+max
+则不用于训练。
+2.3. 分割
+模型训练完成后，可通过对其输出说话人活性值进行
+简单的后处理，用于分割任务或其他子任务。
+• 对于分割或说话人切换检测，单个 θ = 0.5 二值化
+阈值即可获得不错的结果，但通过采用来自 [14] 的
+更高级后处理方法并如图 2 所示进行总结，可以获
+得更好的性能。
+• 对于语音活动检测，我们首先计算所有 K 个说 max
+话人中的最大活性值：
+yˆt VAD =maxyˆt k (2)
+k
+然后，仅对得到的一维^yVAD 应用上述后处理。
+• 对于重叠语音检测，由于至少需要两个说话人同时
+活跃才能表明存在重叠语音，我们计算第二高的（记
+作 max ）活性值：
+2nd
+yˆt OSD =max
+2nd
+yˆt k (3)
+k
+并使用相同的方法对得到的一维^yOSD 进行后处理。
+2.4. 重叠感知的重新分割
+尽管越来越多的说话人分离方法尝试考虑重叠语音问
+题 [7]，但最可靠的那些方法（如图 3 中使用的 VBx 方
+法 [15]）在内部仍然假设任意时刻最多只有一个说话人处
+于活跃状态。因此，有必要引入一个后处理步骤，为重叠
+语音区域分配多个说话人标签 [4, 17]。
+给定一个已有的说话人聚类输出（包含K 个说话人），
+其被编码为一系列 K 维的二值帧 yt DIA，我们提出使用分
+ecnerefer
+noitaziraid
+noitatnemgeser
+citsirueh
+图 3: 所提出的重分割方法（第三行）对 VBx 说话人分离
+基准方法（第二行）的影响。我们突出显示了三个区域，其
+中启发式方法表现更好 (t≈100s )、相当 (t≈120s ) 或
+更差 (t ≈ 115 s) 于所提出的方法（来源：DIHARD3 数
+据集中的文件DH_EVAL_0035.(cid:126)ac）。
+割模型作为局部的、能够感知重叠的重新分割模块。该分
+割模型应用于在整段音频上滑动的5秒窗口。在每一步中，
+我们寻找说话人活性值 ^y 的排列，使得其与 yDIA 之间的
+二值交叉熵损失最小。随后，经过排列的滑动说话人活性
+值将在时间维度上进行聚合，并通过第 2.3 节中提出的基
+于阈值的方法进行后处理。
+3. 实验
+数据集与划分. 我们在三个说话人聚类数据集上进行了
+实验并报告了结果，这些数据集涵盖了广泛的领域：
+DIHARD3 语料库 [9, 10] 不提供 训练集。因此，我
+们将它的 开发集分成两部分：192 个文件用作 训练
+集，其余 62 个文件用作较小的 开发集。在本文其余
+部分中，后者简称为 开发集。在定义这一划分（共享
+于huggingface.co/pyannote/segmentation) 时，我们确保了 11
+个领域在两个子集之间均匀分布。评估集保持不变。
+VoxConverse 也没有提供 训练集 [11]。因此，我们也将
+其 开发集分为两部分：前 144 个文件（abjxc 到qouur，按
+字母顺序排列）构成 训练集，剩下的 72 个文件（qppll 到
+zy(cid:122)h）用于实际的 开发集。
+AMI 提供了 Mix-Headset 音频文件的官方 {训练, 开发,
+评估} 划分 [8]。我们保持了 开发和 评估集不变，仅使用
+了 训练集中每个文件的前 10 分钟，最终得到一个实际的
+训练集，其大小（22 小时）与 DIHARD3（25 小时）和
+VoxConverse（15 小时）的 训练集相似。
+实验协议。我们使用由三个训练集拼接而成的合成训练集
+（62 小时）训练了一个唯一的分割模型。合成开发集（24
+小时）用作验证，用于在学习率平缓时降低学习率，并最
+终选择最佳模型检查点。在此过程结束后，仅有一个分割
+模型可用（而非每个数据集一个模型），并用于所有实验。
+然而，检测阈值（θ 、θ 、δ 和 δ ）是针对每个
+on o(cid:122) on o(cid:122)
+数据集使用其自身的 development 集进行专门调整的，因
+为人工标注指南在不同数据集之间存在差异，尤其是在控
+制是否连接说话人内部小停顿的 δ 方面。原因相同，检
+o(cid:122)
+测阈值针对本文所解决的每个任务进行了专门优化：
+• 语音活动检测的阈值选择以最小化检测错误率（即
+误报率和漏检率之和）为目标，且在语音段落边界
 
-我们通过计算使目标适用于我们的自回归设置（注意加粗的t表示每个token都有不同的采
-样 t），从而实现：
-Nw Nl
-∆ θ (xw,xl,t)=∑∥v θ (xw i,ti ,t i )−uw i,ti ∥2 2 −∑∥v θ (xl i,ti ,t i )−ul i,ti ∥2 2 (10)
-i=1 i=1
-发现长度规范化（除以获胜者的长度）会导致不稳定性。
-我们确保在序列的每个位置采样的 t 和 x 对策略模型 θ 和参考模型 θ 保持一致。两个
-0 ref
-DPO 损失以均匀权重相加，但由于训练对 (cid:126)ow-DPO 损失敏感，我们使用了 β =0.1
-semantic
-和 β =0.5 。为保证训练稳定性，采用较低的学习率 8e−8 。
-acoustic
-DPO 的数据通过拒绝采样流水线收集，该流水线以一组保留的单说话人语音样本和多样化
-的合成文本提示作为输入。我们使用 Mistral Small Creative 进行提示。1 使用语音提示的
-转录文本和随机选择的人物设定，合成一系列多样化的文本，以延续或回应对话上下文。随
-后，预训练检查点将语音和文本提示作为输入，从每个输入生成多个样本，从中可构建出胜
-者与败者配对。胜者与败者通过字错误率（WER）、说话人相似度、音量一致性、UTMOS-
-v2 [Baba et al., 2024] 以及其他语言模型评判指标来确定。我们使用结合了 DPO 损失和高
-质量语音上的预训练目标，在 1 轮次内优化模型，因为我们发现，在合成数据上进行更长时
-间的训练会导致语音更加机械化。
-4 结果
-4.1 Voxtral 编解码器
-表 2 展示了在 Expresso 数据集 [Nguyen et al., 2023] 上 Voxtral Codec 与 Mimi 的对比。我
-们评估了以下目标指标：梅尔距离、STFT 距离、语音质量感知评价（PESQ）、扩展短时客
-观可懂度（ESTOI）、使用对应源音频和重构音频的自动语音识别模型生成的转录文本之间
-的词错误率（ASR-WER），以及使用说话人嵌入模型计算的说话人相似度得分。我们还报告
-了比特率和每秒帧数（fps），这些指标在自回归解码器模型的应用场景中具有相关性。由于
-Mimi 采用 RVQ 设计的声学码本，因此可以选择子集码本以权衡比特率与质量。当 Voxtral
-Codec 与 Mimi 在 16 个码本配置下进行比较，使得比特率相近时，Voxtral Codec 在所有
-目标指标上均表现更优。在内部主观评估中，我们发现对于以语音为主要关注内容的音频，
-Voxtral Codec 在 16 个码本配置下的表现与 Mimi 相当或更优。
-表 2: Voxtral 编解码器与 Mimi 在 Expresso 数据集上的对比。
-token/frame× bitrate Reconstruction(↓) Intrusive(↑) Perceptual
-Model fps
-vocab.size (kbps) Mel STFT PESQ ESTOI ASR-WER(%)↓ SpeakerSim↑
-Mimi–8cb(Moshi) 12.5 8×(2048) 1.1 0.702 1.177 2.07 0.803 11.75 0.672
-Mimi–16cb 12.5 16×(2048) 2.2 0.618 1.100 2.67 0.865 11.01 0.829
-Mimi–full32cb 12.5 32×(2048) 4.4 0.552 1.040 3.18 0.910 10.25 0.902
-VoxtralCodec 12.5 1×(8192)+36×(21) 2.1 0.545 0.982 3.05 0.882 10.66 0.843
-4.2 自动评估
-我们使用自动化指标对 Voxtral TTS、ElevenLabs v3 和 ElevenLabs Flash v2.5 在 SEED-
-TTS [Anastassiou et al., 2024] 以及 MiniMax-TTS [Zhang et al., 2025] 中支持的九种语言
-进行评估：
-1https://docs.mistral.ai/models/mistral-small-creative-25-12
-8
+|  |  |  |  |  |  |  |  |  |  |
+|---|---|---|---|---|---|---|---|---|---|
+|  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |
 
-1. 字错误率（WER）：通过 Voxtral Mini 转录 v2 测量，以捕捉语音的可理解性。
-2. UTMOS-v2 [Baba et al., 2024]：预测生成语音的平均意见得分（MOS）。
-3. 说话人相似度: 使用 ECAPA-TDNN 模型 [Desplanques et al., 2020] 预测说话人嵌
-入，并与参考嵌入计算余弦相似度。这评估了生成语音与提供的语音参考的相似度。
-三种模型的结果如表3所示。尽管两个ElevenLabs模型在各类语言中均实现了较低的WER，
-但 Voxtral TTS 在说话人相似度指标上显著优于 ElevenLabs。令人意外的是，我们发现
-ElevenLabsFlashv2.5在大多数自动评估指标上表现更佳，而ElevenLabsv3在人工评估中
-表现更优，尤其是在情感控制方面。这凸显了结合人工评估与自动评估的重要性。
-表 3: Voxtral TTS、ElevenLabs v3 和 ElevenLabs Flash v2.5 的 WER、UTMOS 及说话人相似度
-得分。
-WER(%)↓ UTMOS↑ SpeakerSim↑
-Task Voxtral ElevenLabsv3 ElevenLabsFlash Voxtral ElevenLabsv3 ElevenLabsFlash Voxtral ElevenLabsv3 ElevenLabsFlash
-MiniMax
-Arabic 2.68 3.67 2.86 3.07 2.50 2.89 0.746 0.546 0.539
-German 0.83 0.45 1.08 3.12 2.90 3.27 0.721 0.457 0.489
-English 0.63 0.48 0.33 4.30 4.27 4.27 0.786 0.484 0.489
-Spanish 0.51 0.87 0.49 3.41 3.18 2.99 0.762 0.443 0.541
-French 3.22 2.34 2.26 2.83 2.90 2.94 0.587 0.339 0.378
-Hindi 4.99 8.71 5.08 3.56 3.56 3.35 0.839 0.707 0.679
-Italian 1.32 0.58 0.55 3.43 3.08 3.09 0.739 0.527 0.485
-Dutch 1.99 1.52 0.83 3.89 3.53 3.68 0.720 0.397 0.598
-Portuguese 1.02 0.92 1.15 3.66 3.41 3.41 0.785 0.571 0.642
-SeedTTS 1.23 1.26 0.86 4.11 3.92 4.09 0.628 0.392 0.413
-4.3 人为评估
-自动化指标无法衡量语音合成模型的自然度和表现力，尤其是模型表达特定情感的能力。我
-们发现 UTMOS 仅是一个松散的代理指标，在不同语言间校准不佳，且与人类偏好相关性
-较弱。因此，我们进行了两组人工评估，标注者在不知晓模型身份的情况下比较两个模型生
-成的结果。评估共包含 77 个提示语，其中 11 个为中性提示，66 个带有预期情感。所有评
-估中，标注者被要求判断其中一个生成结果是“稍好”、“明显更好”，还是“两者都好”或
-“两者都差”。在标注过程中，所有音频样本均重采样为 24 kHz 的 WAV 格式（包括参考样
-本），以确保不会因音频质量产生偏差。
-4.3.1 旗舰声音
-首先，我们将我们的旗舰语音（英国女性、英国男性、美国男性、法国女性）与竞争对手提
-供的同性别和同口音的旗舰语音进行对比。我们进行了两次子评估：
-1. 显式引导：我们测试了将语音合成模型的生成结果偏向特定情感的能力。对于带有
-相关情感（非中性）的语音合成提示，我们以自由格式指令的形式提供给Gemini2.5
-Flash TTS，因其支持自由格式指令，例如“用愤怒的语调说话”。对于 ElevenLabs
-v3，我们则提供括号包裹的情感标签 2. 虽然 Voxtral TTS 不支持情感标签/文本指
-令，但我们通过利用同一说话人提供的、体现所需情感的另一语音提示来引导生成。
-2. 隐式引导: 我们测试模型从给定文本中推断情感的能力（例如：“这是我一生中最美
-好的一天！”）。不会向模型提供任何情感标签或指令。对于 Voxtral TTS，我们使用
-中性语音提示。
-2https://elevenlabs.io/blog/eleven-v3-audio-tags-expressing-emotional-context-i
-n-speech
-9
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
+|  |  |  |  |  |  |
 
-我们为每种语言的每一对使用三位同方言的母语者作为标注者。表4展示了VoxtralTTS（不
-包括平局）的胜率。Gemini2.5FlashTTS是表现最强的模型，而VoxtralTTS与ElevenLabs
-v3 相比具有竞争力。在隐式引导设置下，Voxtral TTS 始终优于两个 ElevenLabs 模型。
-表 4: Voxtral TTS 在不同控制类型下的胜率。在显式控制情景下，VoxtralTTS与ElevenLabsv3
-相当，而在隐式控制情景下，其胜率高于两个 ElevenLabs 模型。
-Emotion steering Opponent Model Voxtral TTS Win Rate (%)
-ElevenLabs v3 51.0
-Explicit
-Gemini 2.5 Flash TTS 35.4
-ElevenLabs Flash v2.5 58.3
-Implicit
-ElevenLabs v3 55.4
-Gemini 2.5 Flash TTS 37.1
-4.3.2 Zero-shot 语音克隆
-为评估语音克隆能力，我们在每种语言中选取两位知名演讲者的高质量音频作为音源。在
-zero-shot 情景下，从每个模型生成语音，并指示标注人员根据（a）生成音频与语音提示的
-相似度以及（b）语音的自然度和表现力对生成结果进行评分。
-表 5: Voxtral TTS 在各语言上对 ElevenLabs Flash v2.5 的胜率。VoxtralTTS在每种语言上
-的表现均达到或超过 ElevenLabs Flash v2.5，整体微平均胜率为 68.4%。
-Language Voxtral TTS Win Rate (%)
-Arabic 72.9
-Dutch 49.4
-English 60.8
-French 54.4
-German 72.0
-Hindi 79.8
-Italian 57.1
-Portuguese 74.4
-Spanish 87.8
-Overall 68.4
-表5展示了VoxtralTTS在不同语言下对ElevenLabsFlashv2.5的胜率。总体而言，Voxtral
-TTS的胜率为68.4%，在高资源和低资源语言（如阿拉伯语和印地语）中均表现出显著更优
-的结果。值得注意的是，Voxtral TTS 在 zero-shot 情景下的胜率（68.4%）远高于旗舰语音
-（58.3%），突显出 Voxtral TTS 是一个更具泛化能力的模型，能够捕捉多样化的用户语音特
-征。
-5 分析
-在本节中，我们对预训练模型和 DPO 检查点进行了比较，并对相关的推理参数进行了消融
-实验。
+处不设置宽容区间； 叠语音检测方法，我们认为这此前是该任务的最新状态[4]。
+• 重叠语音检测的阈值被选择为最大化检测F 1 -得分， 重叠感知的重新分割。尽管我们的分割模型在语音活动检
+且不采用任何宽容区间；
+测和重叠语音检测中均表现出实用性，但其真正优势体现
+• 对于重新分割，检测阈值的选择旨在最小化说话人 在对现有说话人聚类流水线输出的后处理上。表 3 总结了
+辨识错误率，不使用宽容区间但包含重叠语音区域。 在三个基准流水线上的重新分割实验结果，这些基准按性
+这与DIHARD3评估方案[10]和AMIFull 评估设 能从差到好排序：pyannote1.1预训练流水线[16]、dihard3
+置[15]一致，但与使用250ms宽容区间的VoxCon- 官方基准[9]以及BUT的VBx 方法[15]。选择这些基准
+verse 挑战规则 [11] 不同。 所采用（尽管存在错误）的准则为使用便捷性和可复现性。
+所有指标均使用pyannote.metrics [18]开源Python库计 由于 [15] 中报告的 VBx 基准结果依赖于理想语音活动检
+算。 测，而共享代码库并未提供官方的语音活动检测实现，因
+此我们采用了自有的方法（表1中标记为Ours），并在其
+实现细节。我们的分割模型接收采样率为16kHz的5秒音
+基础上应用了VBx。我们提出的重新分割方法在所有数据
+集上均持续提升了所有基准的输出效果。相较于最佳基准
+频片段（i.e. 80000个样本的序列）。输入序列通过SincNet
+卷积层，采用原始配置 [19]——除了第一层的步幅设置为 （VBx），相对说话人聚类错误率改善分别达到 AMI 上的
+10（使得 SincNet 帧每 16ms 提取一次）。在两个额外的
+17%、DIHARD上的13%，以及VoxConverse上的13%。
+为了便于比较，我们还实现了一种启发式方法，该方
+全连接层（每个包含 128 个单元且使用 Leaky Relu 活性
+法通过将检测到的重叠语音区域分配给时间上最近的两个
+值）之上堆叠了四个双向长短期记忆网络（LSTM）循环
+层（每个方向各 128 个单元，前三个层使用 50% 暂退法
+说话人来处理 [13]。尽管该方法简单，但其恰好成为一个
+(Dropout)）。这些全连接层也在帧级上操作。最后，一个具
+强大的基准，实际中很难被超越[12]。然而，在几乎所有实
+有Sigmoid激活函数的全连接分类层每16ms输出K - 验条件下，我们提出的重新分割方法均优于该启发式方法
+max
+（仅有两种情况下启发式方法略胜一筹，且优势微小）。进
+维的说话人活性值，取值范围为 0 到 1。总体而言，我们
+一步分析说话人混淆错误率发现，我们的方法在识别重叠
+的模型包含 150 万个可训练参数——其中绝大部分（140
+说话人方面表现显著更优。这一点也得到了在使用理想聚
+万个）来自循环层。
+类结果（yDIA =y）基础上应用该方法时获得的低说话人
+如第 2.2 节所介绍，50% 的训练样本由两个片段的加
+混淆错误率的验证：在 AMI、DIHARD 和 VoxConverse
+权和构成，其信号-信号比在0到10dB之间均匀采样。我
+数据集上，分别仅有 1.4%、1.8% 和 0.6% 的语音被错误
+们还使用来自 MUSAN 数据集 [20] 的加性背景噪声，其
+重新分配。图 3展示了它们在一段 20 秒短片段上的行为
+信号-噪声比在 5 到 15dB 之间均匀采样。
+表现，具有定性参考价值。特别地，可以看出这两种方法
+我们使用 Adam 优化器，采用 PyTorch 的默认参数，
+（启发式与所提方法）的行为存在差异，具有互补潜力。
+并以批量大小为 128 进行模型训练。学习率初始值设为
 10
+−3，当其在开发集上的性能达到平台期时，学习率将按
+因子 2 减小。使用 4 块 V100 GPU，大约耗时 3 天达到 5. 结论
+最佳性能。虽然我们在huggingface.co/pyannote/segmentation
+本文报告的整体最佳流水线是我们的语音活动检测、
+公开预训练模型以便复现结果，但整个训练过程同样可复
+现成的 VBx 聚类以及我们提出的重分割方法的组合，该
+现，因为所有内容均已集成至pyannote.audio开源库版本
+方法能够处理重叠部分，在 AMI Mix-Headset 上达到
+2.0 中 [16]。
+DER = 19.9%，使用的是 [15] 中引入的完整评估设置；
+在 DIHARD 3 评估集上达到 DER = 19.3%（完整条件，
+4. 结果与讨论
+比第一名提交结果低 2.6%）；在 VoxConverse 开发集上
+达到 DER = 7.1%（或在加入 250ms 宽容窗口后达到
+语音活动检测。表 1 对比了所提出的语音活动检测方法与
+DER=3.4%）。
+官方 dihard3 基准 [9]、Landini 在 VoxConverse 挑战赛
+即使使用了宽容标记，漏检和误报仍是所有三个数据
+中的提交结果 [12]，以及 pyannote 1.1 语音活动检测模
+集中的主要错误来源（错误率是说话人混淆的两倍），这
+型 [16] 的性能。主要结论是，尽管该模型是为分割任务训
+表明尽管取得了进展，重叠语音检测仍然是一个尚未解决
+练的，但其表现优于其他专为语音活动检测训练的模型。
+（有时定义不清）的问题。
+然而，需要注意的是，不应轻易对 silero_vad 模型 [21]
+的性能做出判断，因为这是一个现成的模型，并未针对这
+些数据集进行专门训练。
+重叠语音检测。为重叠语音检测任务找到良好且可复现的
+基准证明是一项困难的任务。我们感谢Kunesova 等人[3]
+和 Landini 等人 [12] 共享了他们检测流水线的输出结果。
+表 2 中报告的结果显示，与语音活动检测类似，我们的分
+割模型即使最初并未为此特定任务进行训练，仍可成功用
+于重叠语音检测。该模型的表现优于 pyannote 1.1 的重
+表 1: 语音活动检测 // FA = 误报率 (%) / 漏检率 (%)
+AMI[8,15] DIHARD3[9] VoxConverse[11]
+VAD
+FA Miss. FA+Miss. FA Miss. FA+Miss. FA Miss. FA+Miss.
+silero_vad 9.4 1.7 11.0 17.0 4.0 21.0 3.0 1.1 4.2
+dihard3[9] NA NA NA 4.0 4.2 8.2 NA NA NA
+Landinietal.[12] NA NA NA NA NA NA 1.8 1.1 3.0
+pyannote1.1[16] 6.5 1.7 8.2 4.1 3.8 7.9 4.5 0.3 4.8
+Ours–pyannote2.0 3.6 3.2 6.8 3.9 3.3 7.3 1.8 0.8 2.5
 
-5.1 DPO 优化
-表 6 展示了预训练模型和 DPO 检查点的 WER 与 UTMOS 指标。总体而言，DPO 在两
-项指标上均有所提升，其中德语和法语的提升最为显著，而印地语则出现下降。定性分析发
-现，DPO 模型的幻觉现象更少，漏读单词的情况也更少。此外，DPO 还缓解了预训练模型
-在音频播放过程中音量明显衰减的偶发倾向。有趣的是，DPO 对说话人相似度的影响极小，
-其值与预训练检查点相差不超过 ±0.01（为简洁起见，此处未展示）。
-表 6: DPO 在多种语言中均提升了 WER 和 UTMOS。
-WER (%) ↓ UTMOS ↑
-Task Pretrain DPO Pretrain DPO
-MiniMax
-Arabic 2.80 2.68 (-0.12) 3.01 3.07 (+0.06)
-German 4.08 0.83 (-3.25) 3.05 3.12 (+0.07)
-English 0.84 0.63 (-0.21) 4.25 4.30 (+0.05)
-Spanish 0.56 0.51 (-0.06) 3.38 3.41 (+0.04)
-French 5.01 3.22 (-1.79) 2.76 2.83 (+0.07)
-Hindi 3.39 4.99 (+1.61) 3.43 3.56 (+0.13)
-Italian 2.18 1.32 (-0.85) 3.36 3.43 (+0.07)
-Dutch 3.10 1.99 (-1.11) 3.85 3.89 (+0.04)
-Portuguese 1.17 1.02 (-0.15) 3.60 3.66 (+0.06)
-Seed TTS 1.58 1.23 (-0.35) 4.07 4.11 (+0.04)
-5.2 推理参数
-图4展示了在功能评估次数（NFEs）和CFGα选择变化时，自动评估指标的影响。当NFEs
-从 2 增加到 8 时，各项指标均有显著提升。我们发现，将 NFEs 进一步增加至 8 以上对说
-话人相似度的提升效果微乎其微，且在词错误率（WER）上出现轻微下降。因此，我们将 8
-个 NFEs 作为默认的推理设置。
-增大CFGα 的值，我们发现除UTMOS-v2外，所有指标均呈现近乎单调的提升。然而，内
-部人工评估发现，较高的 α 会导致模型过度遵循提供的语音提示，无法对文本提示中隐含
-的情感进行合理偏向。此外，我们还发现较低的 α=1.2 在高质量音频（如专业录音）上表
-现最佳，而野外录制的音频可能从较高的 α 中受益。
-6 vLLM-Omni 中的推理与服务
-Voxtral TTS 通过 vLLM-Omni [Yin et al., 2026] 提供服务，这是针对多阶段多模态模型的
-vLLM [Kwon et al., 2023] 扩展。Voxtral TTS 被分解为两阶段流水线：第一阶段为生成阶
-段，预测音频 token（语义和声学），随后是编码器解码阶段，将 token 转换为波形。两个阶
-段通过共享内存上的异步分块流协议进行通信，实现在完整波形生成之前即可实现首个音频
-输出的低延迟。
-11
-
-30.0
-25.0
-20.0
-15.0
-10.0
-2 4 8 16
-NFEs
-)
-( REW
-30.1 3.5
-3.0
-2.5
-2.0
-6.5 6.7 7.0 1.5
-2 4 8 16
-NFEs
-)
-(
-SOMTU
-3.48 3.48 0.75
-0.70
-0.65
-2.58
-0.60
-0.55
-0.50
-1.44 0.45
-2 4 8 16
-NFEs
-)
-(
-ytiralimiS
-rekaepS
-0.732 0.735
-0.656
-0.421
-7.5
-7.2
-7.0
-6.8
-6.5
-6.2
-1.0 1.1 1.2 1.3 1.4
-)
-(
-REW
-7.5 3.5
-7.1 3.4
-6.7 3.3
-3.2 6.3
-6.2 3.1
-1.0 1.1 1.2 1.3 1.4
-)
-( SOMTU
-3.52 3.48 3.48 0.735
-3.41 0.730
-0.725
-0.720
-0.715
-3.09 0.710
-1.0 1.1 1.2 1.3 1.4
-) (
-ytiralimiS
-rekaepS
-Effect of NFEs
-Effect of CFG Scale
-0.737 0.732 0.733
-0.726
-0.707
-图 4: NFEs 和 CFG 对自动评估的影响。指标在 SEED-TTS 和 MiniMax 中的 9 种语言上取平均
-值。将 NFEs 从 2 增加到 8 可以提升说话人相似度和 UTMOS 指标。当 NFEs 超过此值时，WER
-指标略有下降。随着 CFG 值提高，各项指标单调上升，但人工评估指出，在高 α 情况下存在文本一
-致性下降的问题。
-6.1 用于流匹配 Transformer 的 CUDA 图加速
-生成阶段的流匹配 Transformer 是计算瓶颈。每个解码步骤在使用 CFG 时需要 N 次函数
-求值，每生成一帧需进行 2×N 次前向传播。
-为消除 Python 层开销和内核启动延迟，整个常微分方程求解器被捕捉为 CUDA 图。在启
-动时，会对每个桶的大小执行一次即时预热遍历，并相应地捕捉 CUDA 图。在推理过程中，
-实际批量大小会被向上舍入到最近的桶大小，通过用零填充输入实现。接着，重放 CUDA
-图，并将输出切片回实际批量大小。如果批量大小超过已捕捉的最大桶大小，则模型退回到
-即时执行模式。
-为了评估 CUDA 图加速的效果，我们对比了在急切模式（eager mode）和 CUDA 图下解码
-时的延迟和实时因子（RTF）。表 7 报告了在单个 H200 上，输入 500 个字符文本、10 秒
-音频参考以及并发数为 1 的情况下的结果。启用 CUDA 图后，延迟改善了 47%，实时因子
-（RTF）降低了 2.5 倍。
-表 7: CUDA 图加速对流匹配 Transformer 的影响。
-Con(cid:125)guration Latency RTF
-Eager mode 133 ms 0.258
-CUDA graph 70 ms 0.103
-6.2 异步分块流
-两个流水线阶段在分离的调度环中运行。为了将自回归生成阶段的解码与编解码器解码阶段
-的波形合成重叠，引入了一种异步分块流协议。
-12
-
-|  |  |  |  |  |
+| AMI[8,15]
+FA Miss. FA+Miss. |  | DIHARD3[9]
+FA Miss. FA+Miss. |  |  |
 |---|---|---|---|---|
-|  |  |  |  |  |
-|  |  |  |  |  |
-|  |  |  |  |  |
-|  | 6. | 5 6. | 7 7. | 0 |
+| 9.4 1.7
+NA NA
+NA NA
+6.5 1.7 | 11.0
+NA
+NA
+8.2 | 17.0 4.0
+4.0 4.2
+NA NA
+4.1 3.8 | 21.0
+8.2
+NA
+7.9 | 3.0 1.1
+NA NA
+1.8 1.1
+4.5 0.3 |
+| 3.6 3.2 | 6.8 | 3.9 3.3 | 7.3 | 1.8 0.8 |
 
-|  |  |  |  |  |
-|---|---|---|---|---|
-|  | 2. | 58 |  |  |
-|  |  |  |  |  |
-| 1. | 44 |  |  |  |
-|  |  |  |  |  |
+表 2: 重叠语音检测 // FA = 误报率 (%) / 漏检率 = (%) / F 1 = F 1 -得分 (%)
+AMI[8,15] DIHARD3[9] VoxConverse[11]
+OSD
+FA Miss. Precision Recall F1 FA Miss. Precision Recall F1 FA Miss. Precision Recall F1
+Kunesovaetal.[3] NA NA 71.5 46.1 56.0 NA NA NA NA NA NA NA NA NA NA
+Landinietal.[12] NA NA NA NA NA NA NA NA NA NA 10.4 71.8 73.0 28.2 40.7
+pyannote1.1[16,4] 51.1 12.1 63.2 87.9 73.5 48.2 45.2 53.2 54.8 54.0 130.4 17.7 38.7 82.3 52.6
+Ours–pyannote2.0 16.9 29.4 80.7 70.5 75.3 46.9 37.2 57.2 62.8 59.9 26.3 24.5 74.2 75.5 74.8
+表 3: 重新分割 // FA = 误报 / 漏检 = 漏检 / 混淆 = 说话人混淆 / DER = 说话人分离错误率
+Overlap-aware AMI[8,15] DIHARD3[9] VoxConverse[11]
+Baseline
+resegmentation FA Miss. Conf. DER FA Miss. Conf. DER FA Miss. Conf. DER
+pyannote1.1[16] _ 5.0 16.2 8.5 29.7 3.4 13.2 12.6 29.2 2.0 10.1 9.5 21.5
+Heuristic[13]w/ourOSD 6.9 7.9 10.9 25.7 6.3 8.9 12.8 28.1 2.8 7.3 10.1 20.3
+Ours–pyannote2.0 4.0 13.0 9.1 26.1 5.1 9.8 10.3 25.2 2.4 3.1 9.8 15.4
+dihard3[9] _ NA NA NA NA 3.6 13.3 8.4 25.4 NA NA NA NA
+Heuristic[13]w/ourOSD NA NA NA NA 6.8 8.7 8.8 24.3 NA NA NA NA
+Ours–pyannote2.0 NA NA NA NA 4.6 10.2 7.5 22.2 NA NA NA NA
+VBx[15]w/ourVAD _ 3.1 17.2 3.8 24.1 3.6 12.5 6.2 22.3 1.7 5.1 1.4 8.3
+Heuristic[13]w/ourOSD 5.1 8.7 6.1 19.9 7.0 7.8 6.4 21.2 2.7 2.1 2.0 6.8
+Ours–pyannote2.0 4.3 10.9 4.7 19.9 4.7 9.7 4.9 19.3 2.7 2.6 1.8 7.1
+Oracle Ours–pyannote2.0 4.7 10.0 1.4 16.1 4.6 9.8 1.8 16.2 2.6 2.5 0.6 5.7
+6. References
+[11] J. S. Chung, J. Huh, A. Nagrani, T. Afouras, and
+A. Zisserman, “Spot the Conversation: Speaker Diarisation
+[1] R.Yin, H.Bredin, andC.Barras, “SpeakerChangeDetec- intheWild,” inProc.Interspeech2020, 2020, pp.299–303.
+tioninBroadcastTVUsingBidirectionalLongShort-Term [Online].Available: http://dx.doi.org/10.21437/Interspeech.
+MemoryNetworks,”inProc.Interspeech2017,2017. 2020-2337
+[2] D. Charlet, C. Barras, and J. Liénard, “Impact of overlap- [12] F.Landini, O.Glembek, P.Matějka, J.Rohdin, L.Burget,
+ping speech detection on speaker diarization for broadcast M. Diez, and A. Silnova, “Analysis of the BUT Diarization
+newsanddebates,”in2013 IEEE International Conference SystemforVoxConverseChallenge,”in2021IEEEInterna-
+on Acoustics, Speech and Signal Processing, May 2013, pp. tional Conference on Acoustics, Speech and Signal Process-
+7707–7711. ing(ICASSP),2021.
+[3] M.Kunešová,M.Hrúz,Z.Zajíc,andV.Radová,“Detection [13] S. Otterson and M. Ostendorf, “E(cid:123)cient use of overlap in-
+of overlapping speech for the purposes of speaker diariza- formation in speaker diarization,” in 2007 IEEE Workshop
+tion,”inSpeechandComputer,A.A.Salah,A.Karpov,and onAutomaticSpeechRecognition&Understanding(ASRU).
+R. Potapova, Eds. Cham: Springer International Publish- IEEE,2007,pp.683–686.
+ing,2019,pp.247–257.
+[14] G. Gelly and J.-L. Gauvain, “Optimization of RNN-Based
+[4] L. Bullock, H. Bredin, and L. P. Garcia-Perera, “Overlap- Speech Activity Detection,” IEEE/ACM Transactions on
+aware diarization: Resegmentation using neural end-to-end Audio, Speech, and Language Processing,vol.26,no.3,pp.
+overlappedspeechdetection,”inProc.ICASSP2020,2020. 646–656,March2018.
+[5] Y. Fujita, N. Kanda, S. Horiguchi, K. Nagamatsu, and [15] F. Landini, J. Profant, M. Diez, and L. Burget, “Bayesian
+S.Watanabe,“End-to-EndNeuralSpeakerDiarizationwith hmm clustering of x-vector sequences (vbx) in speaker di-
+Permutation-freeObjectives,”inInterspeech,2019,pp.4300– arization: theory, implementationand analysis on standard
+4304. tasks,”2020.
+[6] Y. Fujita, N. Kanda, S. Horiguchi, Y. Xue, K. Nagamatsu, [16] H. Bredin, R. Yin, J. M. Coria, G. Gelly, P. Korshunov,
+and S. Watanabe, “End-to-end neural speaker diarization M. Lavechin, D. Fustes, H. Titeux, W. Bouaziz, and M.-
+withself-attention,”in2019IEEEAutomaticSpeechRecog- P.Gill,“pyannote.audio: neuralbuildingblocksforspeaker
+nitionandUnderstandingWorkshop(ASRU),2019,pp.296– diarization,”inProc.ICASSP2020,2020.
+303.
+[17] S. Horiguchi, P. Garcia, Y. Fujita, S. Watanabe, and
+[7] Y.Takashima,Y.Fujita,S.Watanabe,S.Horiguchi,P.Gar- K. Nagamatsu, “End-to-end speaker diarization as post-
+cía,andK.Nagamatsu,“End-to-endspeakerdiarizationcon- processing,”2020.
+ditioned on speech activity and overlap detection,” in 2021
+IEEE Spoken Language Technology Workshop (SLT),2021, [18] H. Bredin, “pyannote.metrics: a toolkit for reproducible
+pp.849–856. evaluation, diagnostic, and error analysis of speaker
+diarizationsystems,” in Proc.Interspeech2017, Stockholm,
+[8] J.Carletta,“Unleashingthekillercorpus: experiencesincre- Sweden,August2017.[Online].Available: http://pyannote.
+atingthemulti-everythingAMIMeetingCorpus,”Language github.io/pyannote-metrics
+ResourcesandEvaluation,vol.41,no.2,2007.
+[19] M.RavanelliandY.Bengio,“Speakerrecognitionfromraw
+[9] N.Ryant,P.Singh,V.Krishnamohan,R.Varma,K.Church, waveformwithsincnet,”inProc.SLT2018,2018.
+C. Cieri, J. Du, S. Ganapathy, and M. Liberman, “The
+Third DIHARD Diarization Challenge,” arXiv preprint [20] D. Snyder, G. Chen, and D. Povey, “MUSAN: A Music,
+arXiv:2012.01477,2020. Speech,andNoiseCorpus,”2015.
+[10] N. Ryant, K. Church, C. Cieri, J. Du, S. Ganapathy, and [21] SileroTeam,“SileroVAD:pre-trainedenterprise-gradeVoice
+M.Liberman,“ThirdDIHARDChallengeEvaluationPlan,” Activity Detector (VAD), Number Detector and Language
+arXivpreprintarXiv:2006.05815,2020. Classi(cid:125)er,”https://github.com/snakers4/silero-vad,2021.
 
-|  |  |  |
-|---|---|---|
-| 0.6 | 56 |  |
-|  |  |  |
-|  |  |  |
-|  |  |  |
-|  |  |  |
-| 421 |  |  |
+| AMI[8,15]
+FA Miss. Precision Recall F1 |  |  | DIHARD3[9]
+FA Miss. Precision Recall F1 |  |  |  |  |
+|---|---|---|---|---|---|---|---|
+| NA NA
+NA NA
+51.1 12.1 | 71.5 46.1
+NA NA
+63.2 87.9 | 56.0
+NA
+73.5 | NA NA
+NA NA
+48.2 45.2 | NA NA
+NA NA
+53.2 54.8 | NA
+NA
+54.0 | NA NA
+10.4 71.8
+130.4 17.7 | NA NA
+73.0 28.2
+38.7 82.3 |
+| 16.9 29.4 | 80.7 70.5 | 75.3 | 46.9 37.2 | 57.2 62.8 | 59.9 | 26.3 24.5 | 74.2 75.5 |
 
-|  | 7. | 1 |  |  |  |
+| Overlap-aware
+resegmentation | AMI[8,15]
+FA Miss. Conf. DER |  | DIHARD3[9]
+FA Miss. Conf. DER |  |  |
 |---|---|---|---|---|---|
-|  |  | 6. | 7 |  |  |
-|  |  |  |  |  |  |
-|  |  |  | 6. | 3
-6. | 2 |
-|  |  |  |  |  |  |
-
-|  | 3. | 41 |  |  |  |
-|---|---|---|---|---|---|
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-| 3. | 09 |  |  |  |  |
-|  |  |  |  |  |  |
-
-|  | 0.7 | 32 0.7 | 33 |
-|---|---|---|---|
-| 0.7 | 26 |  |  |
-|  |  |  |  |
-|  |  |  |  |
-|  |  |  |  |
-| 707 |  |  |  |
-
-在每次生成步骤后，vLLM-Omni 传输管理器会将音频 token 存储到每个请求的缓冲区中。
-当缓冲区长度达到预定义值时，便会将一段 token 发送到编解码器解码阶段。为了确保各段
-之间的连贯性，每段输出都包含一部分先前的帧以及新生成的帧。这种重叠使得编解码器解
-码器的因果滑动窗口注意力机制能够在段边界之间保持时间上的连贯性。
-6.3 推理吞吐量
-通过本节介绍的技术，Voxtral TTS 实现了低延迟、高通量的推理。表 8 展示了在单个
-NVIDIA H200 上，从并发度 1 到 32 的服务性能，输入为 500 字符的文本和 10 秒的音
-频参考。当并发度从 1 增加到 32 时，吞吐量从每秒 119 字符提升至每 GPU 每秒 1,431 字
-符，提升了 12 倍，而延迟始终保持在 1 秒以下。等待率（定义为客户端因等待输出而必须
-停顿的音频块比例）在所有并发级别下均保持为零。随着并发度增加，每个请求的 RTF 在
-并发度 32 时仅小幅上升至 0.302，仍远低于实时边界。
-这些结果表明，Voxtral TTS 适合用于生产环境部署：单个 H200 可以同时为超过 30 个用
-户提供不间断的流式输出，并实现亚秒级的首音频延迟。
-表 8: Voxtral TTS 在单个 H200 上的推理性能。
-Concurrency Latency RTF Throughput (char/s/GPU) Wait Rate
-1 70 ms 0.103 119.14 0%
-16 331 ms 0.237 879.11 0%
-32 552 ms 0.302 1430.78 0%
-7 结论
-我们介绍了VoxtralTTS，这是一种多语言文本到语音模型，采用混合架构实现语义token的
-自回归生成以及声学token的流匹配。这些token对应于VoxtralCodec中的token，Voxtral
-Codec 是一种语音分词器，结合了通过语音识别（ASR）蒸馏得到的语义 token 与矢量量化
-（FSQ）声学 token。
-Voxtral TTS 能够仅需 3 秒的参考音频即可生成富有表现力的语音克隆，且在人类评估中
-优于 API 基准。我们以 CC BY-NC 许可证发布 Voxtral TTS 的开源权重，以支持更具表
-现力的语音合成系统的研究与开发。
-核心贡献者
-刘弘毅、艾利克斯·塔克内、安迪·艾伦伯格、安迪·罗、孙晨佑、古斯塔夫·兰普尔、亨
-利·拉加德、让-马洛·德利尼翁、金载永、约翰·哈维尔、克亚提·拉加维·钱杜、洛伦佐·
-西诺雷蒂、玛格丽特·詹宁斯、帕特里克·冯·普拉滕、帕万卡马尔·雷迪·穆迪雷迪、罗
-欣·阿罗拉、桑奇特·甘地、塞缪尔·休梅奥、索汉·戈什、斯里詹·米什拉、范春。
-贡献者们
-阿卜杜拉齐兹·布纳尔，阿比纳夫·拉斯特吉，阿德里安·萨德，艾伦·杰法雷斯，阿尔伯
-特·江，亚历山大·卡希尔，亚历山大·加瓦丹，亚历山大·萨布雷洛，阿梅莉·埃利乌，阿
-莫斯·尤，安德鲁·白，安德鲁·赵，安热勒·兰格莱梅茨，安莫尔·阿加瓦尔，安东·埃
-利谢耶夫，安东尼娅·卡尔维，阿琼·马朱姆达尔，阿瑟·福尼耶，阿特约姆·乔森，阿维·
-13
-
-苏里亚拉奇，艾森努尔·卡拉杜曼·乌图尔，巴普蒂斯特·布，巴普蒂斯特·罗齐埃尔，鲍
-杜因·德·莫尼克奥，本杰明·提比，鲍文·杨，夏洛特·克龙杰尔，克莱芒斯·兰弗朗奇，
-康纳·陈，科伦坦·巴罗，科伦坦·索蒂埃，西普里安·库尔托，达里乌斯·达贝尔特，迭
-戈·德拉斯卡萨斯，叶丽扎维塔·德米亚年科，埃利奥特·查内-萨内，埃马纽埃尔·戈特洛
-布，昂格兰·帕昆，埃蒂安·戈菲内，法比安·尼埃尔，法鲁克·艾哈迈德，费德里科·巴
-尔达萨雷，加布里埃勒·贝拉达，盖坦·埃克雷庞，戈蒂埃·古内，琴妮薇芙·海耶斯，乔
-治·诺维科夫，吉达·皮斯蒂利，古斯塔夫·昆什，古斯塔夫·马丁，古斯塔夫·雷亚尔，冈
-詹·丹胡卡，贡希·古普塔，周汉，哈希尔·沙阿，霍普·麦戈文，雨果·蒂蒙尼耶，因德
-拉尼尔·穆克赫吉，张伊蕾，贾克·孙，扬·卢德兹耶夫斯基，贾森·鲁特，杰雷米·丹坦，
-乔阿基姆·施特尼亚，乔纳斯·阿玛，约瑟芬·德尔阿斯，乔塞尔·索默维尔·罗伯茨，朱
-利安·陶兰，卡梅什·亚达夫，卡蒂克·坎德尔瓦尔，基利安·特普，库什·贾因，劳伦斯·
-艾奇森，劳伦特·费因辛，莱昂纳德·布利耶，赵凌霄，路易斯·马丁，露西尔·索尔尼耶，
-高璐瑜，马滕·布伊尔，马南·夏尔马，玛丽·佩拉特，马克·普林斯，马蒂亚·亚历山大，
-马蒂厄·波里，马蒂厄·施密特，马蒂尔德·吉利亚米，马蒂厄·迪诺，马蒂厄·富泰拉尔，
-马克西姆·达林，马克斯米连·奥古斯丁，梅特·翁萨尔，米娅·奇基尔，米哈伊尔·比鲁
-钦斯基，阮明光，米尔切亚·利卡，莫尔甘·里维耶尔，内哈·古普塔，奥利维耶·布谢，奥
-利维耶·杜尚，帕特里夏·王，保罗·雅各布，保罗·瓦姆贝格，保利娜·库里洛维奇，菲
-利普·皮奈尔，菲洛梅娜·尚尼亚，皮埃尔·斯托克，皮奥特尔·米洛斯，普拉泰克·古普
-塔，普拉韦什·阿格拉瓦尔，昆汀·托罗巴，拉姆·拉姆拉克亚，兰德尔·伊斯恩豪尔，里
-希·沙阿，罗曼·索维斯特，罗曼·索列茨基，罗莎莉·米勒，鲁珀特·门尼尔，萨加尔·瓦
-泽，塞缪尔·巴里，塞缪尔·贝尔卡迪，桑迪普·苏布拉马尼亚，肖恩·查，沙夏瓦特·维
-尔马，西德汉特·瓦格贾勒，锡德哈特·甘地，西蒙·勒帕日，苏穆克·艾萨尔，西蒙·安
-东尼亚克，塔鲁恩·库马尔·万加尼，特文·勒斯卡奥，让·卡歇，托马斯·西蒙·索尔格，
-蒂博·拉夫里尔，托马斯·查巴尔，托马斯·富贝尔，托马斯·罗伯特，托马斯·王，蒂姆·
-劳森，汤姆·贝威利，汤姆·爱德华兹，泰勒·王，乌马尔·贾米尔，翁贝托·托马西尼，瓦
-莱里亚·尼姆奇诺娃，维丹·南达，维克多·儒奥，文丁·李，威廉·哈瓦德，威廉·马歇
-尔，李兴辉，郭兴然，杨欣宇，扬尼克·诺豪斯，亚辛·埃尔奥瓦希迪，亚西尔·本杜，王
-一涵，潘一木，扎克查里·拉姆齐，许振林
-7.1 致谢
-我们感谢vLLM-Omni团队的高晗、刘洪胜、王睿和林悦千在将VoxtralTTS集成到vLLM-
-Omni 框架过程中提供的支持与贡献。
-14
-
-参考文献
-Philip Anastassiou, Jiawei Chen, Jitong Chen, Yuanzhe Chen, Zhuo Chen, Ziyi Chen, Jian
-Cong, Lelai Deng, Chuang Ding, Lu Gao, Mingqing Gong, Peisong Huang, Qingqing
-Huang, Zhiying Huang, Yuanyuan Huo, Dongya Jia, Chumin Li, Feiya Li, Hui Li, Jiaxin
-Li, Xiaoyang Li, Xingxing Li, Lin Liu, Shouda Liu, Sichao Liu, Xudong Liu, Yuchen Liu,
-Zhengxi Liu, Lu Lu, Junjie Pan, Xin Wang, Yuping Wang, Yuxuan Wang, Zhengnan
-Wei, Jian Wu, Chao Yao, Yifeng Yang, Yuanhao Yi, Junteng Zhang, Qidi Zhang, Shuo
-Zhang, Wenjie Zhang, Yang Zhang, Zilin Zhao, Dejian Zhong, and Xiaobin Zhuang.
-Seed-tts: Afamilyofhigh-qualityversatilespeechgenerationmodels, 2024. URLhttps:
-//arxiv.org/abs/2406.02430.
-Kaito Baba, Wataru Nakata, Yuki Saito, and Hiroshi Saruwatari. The t05 system for the
-VoiceMOS Challenge 2024: Transfer learning from deep image classi(cid:125)er to naturalness
-MOS prediction of high-quality synthetic speech. In IEEE Spoken Language Technology
-Workshop (SLT), pages 818–824, 2024. doi: 10.1109/SLT61566.2024.10832315.
-Donald J. Berndt and James Cli(cid:122)ord. Using dynamic time warpingto (cid:125)nd patterns in time
-series. In Proceedings of the 3rd International Conference on Knowledge Discovery and
-Data Mining, AAAIWS’94, page 359–370. AAAI Press, 1994.
-Zalán Borsos, Raphaël Marinier, Damien Vincent, Eugene Kharitonov, Olivier Pietquin,
-Matt Shari(cid:125), Dominik Roblek, Olivier Teboul, David Grangier, Marco Tagliasacchi,
-and Neil Zeghidour. Audiolm: A language modeling approach to audio generation.
-IEEE/ACM Transactions on Audio, Speech, and Language Processing, 31:2523–2533,
-2023. doi: 10.1109/TASLP.2023.3288409.
-Huiwen Chang, Han Zhang, Lu Jiang, Ce Liu, and William T. Freeman. Maskgit: Masked
-generativeimagetransformer. InProceedings of the IEEE/CVF Conference on Computer
-Vision and Pattern Recognition (CVPR), pages 11315–11325, June 2022.
-Alexandre Défossez, Jade Copet, Gabriel Synnaeve, and Yossi Adi. High (cid:125)delity neural
-audio compression. arXiv preprint arXiv:2210.13438, 2022.
-Alexandre Défossez, Laurent Mazaré, Manu Orsini, Amélie Royer, Patrick Pérez, Hervé
-Jégou, Edouard Grave, and Neil Zeghidour. Moshi: a speech-text foundation model for
-real-time dialogue. arXiv preprint arXiv:2410.00037, 2024.
-BrechtDesplanques,JentheThienpondt,andKrisDemuynck. ECAPA-TDNN:Emphasized
-channel attention, propagation and aggregation in TDNN based speaker veri(cid:125)cation. In
-Interspeech 2020, pages 3830–3834, 2020. doi: 10.21437/Interspeech.2020-2650.
-Jonathan Ho and Tim Salimans. Classi(cid:125)er-free di(cid:122)usion guidance. arXiv preprint
-arXiv:2207.12598, 2022. URL https://arxiv.org/abs/2207.12598.
-Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu,
-Joseph E. Gonzalez, Hao Zhang, and Ion Stoica. E(cid:123)cient memory management for large
-language model serving with PagedAttention. In Proceedings of the ACM SIGOPS 29th
-Symposium on Operating Systems Principles, 2023. doi: 10.1145/3600006.3613165.
-15
-
-Matt Le, Apoorv Vyas, Bowen Shi, Brian Karrer, Leda Sari, Rashel Moritz, Mary
-Williamson, Vimal Manohar, Yossi Adi, Jay Mahadeokar, and Wei-Ning Hsu. Voicebox:
-Text-guided multilingual universal speech generation at scale. In Advances in Neural In-
-formation Processing Systems, volume 36, 2023. URL https://proceedings.neurips.
-cc/paper_files/paper/2023/hash/2d8911db9ecedf866015091b28946e15-Abstrac
-t-Conference.html.
-Alexander H Liu, Sung-Lin Yeh, and James R Glass. Revisiting self-supervised learning
-of speech representation from a mutual information perspective. In ICASSP 2024-2024
-IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP),
-pages 12051–12055. IEEE, 2024.
-Alexander H. Liu, Andy Ehrenberg, Andy Lo, Clément Denoix, Corentin Barreau, Guil-
-laume Lample, Jean-Malo Delignon, Khyathi Raghavi Chandu, Patrick von Platen,
-Pavankumar Reddy Muddireddy, Sanchit Gandhi, Soham Ghosh, Srijan Mishra, and
-Thomas Foubert. Voxtral, 2025. URL https://arxiv.org/abs/2507.13264.
-AlexanderHLiu,KartikKhandelwal,SandeepSubramanian,VictorJouault,AbhinavRas-
-togi, Adrien Sadé, Alan Je(cid:122)ares, Albert Jiang, Alexandre Cahill, Alexandre Gavaudan,
-et al. Ministral 3. arXiv preprint arXiv:2601.08584, 2026.
-Fabian Mentzer, David Minnen, Eirikur Agustsson, and Michael Tschannen. Finite scalar
-quantization: VQ-VAE made simple, 2023.
-Tu Anh Nguyen, Wei-Ning Hsu, Antony d’Avirro, Bowen Shi, Itai Gat, Maryam Fazel-
-Zarani, Tal Remez, Jade Copet, Gabriel Synnaeve, Michael Hassid, et al. Expresso:
-A benchmark and analysis of discrete expressive speech resynthesis. arXiv preprint
-arXiv:2308.05725, 2023.
-Julian D Parker, Anton Smirnov, Jordi Pons, CJ Carr, Zack Zukowski, Zach Evans, and
-XuboLiu. Scalingtransformersforlow-bitratehigh-qualityspeechcoding. arXivpreprint
-arXiv:2411.19842, 2024.
-WilliamPeeblesandSainingXie.Scalabledi(cid:122)usionmodelswithtransformers.InProceedings
-of the IEEE/CVF International Conference on Computer Vision (ICCV), pages 4195–
-4205, October 2023.
-Vadim Popov, Ivan Vovk, Vladimir Gogoryan, Tasnima Sadekova, and Mikhail Kudinov.
-Grad-TTS: A di(cid:122)usion probabilistic model for text-to-speech. In Proceedings of the 38th
-International Conference on Machine Learning, volume 139 of Proceedings of Machine
-Learning Research, pages 8599–8608. PMLR, 2021. URL https://proceedings.mlr.pr
-ess/v139/popov21a.html.
-O(cid:125)r Press, Noah A Smith, and Mike Lewis. Train short, test long: Attention with linear
-biases enables input length extrapolation. arXiv preprint arXiv:2108.12409, 2021.
-Alec Radford, Jong Wook Kim, Tao Xu, Greg Brockman, Christine McLeavey, and Ilya
-Sutskever. Robust speech recognition via large-scale weak supervision. In International
-conference on machine learning, pages 28492–28518. PMLR, 2023.
-16
-
-Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning,
-and Chelsea Finn. Direct preference optimization: Your language model is secretly a
-rewardmodel. InAdvancesinNeuralInformationProcessingSystems,2023. URLhttps:
-//arxiv.org/abs/2305.18290.
-HugoTouvron,MatthieuCord,AlexandreSablayrolles,GabrielSynnaeve,andHervéJégou.
-Going deeper with image transformers. In Proceedings of the IEEE/CVF international
-conference on computer vision, pages 32–42, 2021.
-AaronVanDenOord,OriolVinyals,etal. Neuraldiscreterepresentationlearning. Advances
-in neural information processing systems, 30, 2017.
-Shikhar Vashishth, Harman Singh, Shikhar Bharadwaj, Sriram Ganapathy, Chulayuth
-Asawaroengchai, Kartik Audhkhasi, Andrew Rosenberg, Ankur Bapna, and Bhu-
-vana Ramabhadran. Stab: Speech tokenizer assessment benchmark. arXiv preprint
-arXiv:2409.02384, 2024.
-Chengyi Wang, Sanyuan Chen, Yu Wu, Ziqiang Zhang, Long Zhou, Shujie Liu, Zhuo Chen,
-Yanqing Liu, Huaming Wang, Jinyu Li, Lei He, Sheng Zhao, and Furu Wei. Neu-
-ral codec language models are zero-shot text to speech synthesizers. arXiv preprint
-arXiv:2301.02111, 2023. URL https://arxiv.org/abs/2301.02111.
-Haibin Wu, Naoyuki Kanda, Se(cid:125)k Emre Eskimez, and Jinyu Li. Ts3-codec: Transformer-
-based simple streaming single codec. arXiv preprint arXiv:2411.18803, 2024.
-Peiqi Yin, Jiangyun Zhu, Han Gao, Chenguang Zheng, Yongxiang Huang, Taichang Zhou,
-Ruirui Yang, Weizhi Liu, Weiqing Chen, Canlin Guo, Didan Deng, Zifeng Mo, Cong
-Wang, James Cheng, Roger Wang, and Hongsheng Liu. vllm-omni: Fully disaggregated
-serving for any-to-any multimodal models, 2026. URL https://arxiv.org/abs/2602.0
-2204.
-Bowen Zhang, Congchao Guo, Geng Yang, Hang Yu, Haozhe Zhang, Heidi Lei, Jialong
-Mai, Junjie Yan, Kaiyue Yang, Mingqi Yang, Peikai Huang, Ruiyang Jin, Sitan Jiang,
-Weihua Cheng, Yawei Li, Yichen Xiao, Yiying Zhou, Yongmao Zhang, Yuan Lu, and
-Yucen He. Minimax-speech: Intrinsic zero-shot text-to-speech with a learnable speaker
-encoder, 2025. URL https://arxiv.org/abs/2505.07916.
-XinZhang,DongZhang,ShiminLi,YaqianZhou,andXipengQiu.Speechtokenizer: Uni(cid:125)ed
-speechtokenizerforspeechlargelanguagemodels.arXivpreprintarXiv:2308.16692,2023.
-Alon Ziv, Sanyuan Chen, Andros Tjandra, Yossi Adi, Wei-Ning Hsu, and Bowen Shi. Mr-
-(cid:126)owdpo: Multi-rewarddirectpreferenceoptimizationfor(cid:126)ow-matchingtext-to-musicgen-
-eration, 2025. URL https://arxiv.org/abs/2512.10264.
-17
+| _
+Heuristic[13]w/ourOSD
+Ours–pyannote2.0 | 5.0 16.2 8.5
+6.9 7.9 10.9
+4.0 13.0 9.1 | 29.7
+25.7
+26.1 | 3.4 13.2 12.6
+6.3 8.9 12.8
+5.1 9.8 10.3 | 29.2
+28.1
+25.2 | 2.0 10.1 9.5
+2.8 7.3 10.1
+2.4 3.1 9.8 |
+| _
+Heuristic[13]w/ourOSD
+Ours–pyannote2.0 | NA NA NA
+NA NA NA
+NA NA NA | NA
+NA
+NA | 3.6 13.3 8.4
+6.8 8.7 8.8
+4.6 10.2 7.5 | 25.4
+24.3
+22.2 | NA NA NA
+NA NA NA
+NA NA NA |
+| _
+Heuristic[13]w/ourOSD
+Ours–pyannote2.0 | 3.1 17.2 3.8
+5.1 8.7 6.1
+4.3 10.9 4.7 | 24.1
+19.9
+19.9 | 3.6 12.5 6.2
+7.0 7.8 6.4
+4.7 9.7 4.9 | 22.3
+21.2
+19.3 | 1.7 5.1 1.4
+2.7 2.1 2.0
+2.7 2.6 1.8 |
