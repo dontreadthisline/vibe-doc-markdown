@@ -16,16 +16,6 @@
 # 安装最新版本
 uv add git+ssh://git@git.xiaojukeji.com/maps-global/doc-markdown.git
 
-# 指定分支或标签
-uv add git+ssh://git@git.xiaojukeji.com/maps-global/doc-markdown.git@main
-uv add git+ssh://git@git.xiaojukeji.com/maps-global/doc-markdown.git@v0.1.0
-```
-
-**使用 pip：**
-
-```bash
-pip install git+ssh://git@git.xiaojukeji.com/maps-global/doc-markdown.git@main
-```
 
 **在 pyproject.toml 中添加：**
 
@@ -46,25 +36,31 @@ ssh -T git@git.xiaojukeji.com
 
 ## 环境配置
 
-### 代理设置（重要）
+### 安装 uv
 
-部分后端（如 `docling`、`marker`）首次使用时需要从 Hugging Face Hub 下载模型。如果网络需要代理，必须在运行前设置环境变量：
+**国内服务器安装（使用 GitHub 代理）：**
 
 ```bash
-# 方式1: 在 shell 中设置
-export HTTP_PROXY="http://127.0.0.1:7890"
-export HTTPS_PROXY="http://127.0.0.1:7890"
+curl -LsSf https://gh-proxy.com/https://github.com/astral-sh/uv/releases/download/0.11.16/uv-x86_64-unknown-linux-gnu.tar.gz -o /tmp/uv.tar.gz
+mkdir -p ~/.local/bin && tar -xzf /tmp/uv.tar.gz -C /tmp/ && cp /tmp/uv-x86_64-unknown-linux-gnu/{uv,uvx} ~/.local/bin/
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+```
 
-# 方式2: 在 Python 代码中设置（需在导入模块前）
-import os
-os.environ["HTTP_PROXY"] = "http://127.0.0.1:7890"
-os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7890"
+### 国内服务器依赖安装
+
+```bash
+cd doc-markdown
+
+# 安装 Python（使用 gh-proxy 加速）
+uv python install 3.12 --mirror "https://gh-proxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"
+
+# 同步依赖（使用清华 PyPI 镜像）
+UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple uv sync
 ```
 
 ### 模型缓存
 
-- `docling`: 模型缓存于 `~/.cache/huggingface/`
-- `marker`: 模型缓存于 `~/Library/Caches/datalab/models/` (macOS)
+- `docling`: 模型缓存于 `~/.cache/huggingface/hub/`（约 500MB）
 - `markitdown`: 无额外模型下载
 
 ## API 接口
